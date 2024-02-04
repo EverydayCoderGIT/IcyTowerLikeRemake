@@ -1,0 +1,11 @@
+Assets are acquired from the following websites, this project is purely educational and the developer is not responsible for any further redistributment without copyright notice. Users must comply with the copyright rules of each asset if they want to use or redistribute these assets
+
+PlatformTiles_BrownNature_ByEris from open game art:
+BackgroundGradient.png
+tile_00.png
+
+Music from open game art with the same name as the file
+jump_higher_run_faster.ogg
+
+Character sprite sheet from https://www.spriters-resource.com/pc_computer/icytower/sheet/30409/
+character.png
