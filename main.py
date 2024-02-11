@@ -6,6 +6,9 @@ from pygame.key import ScancodeWrapper
 from pygame.time import Clock
 from pygame.surface import SurfaceType
 
+# Path
+from os import path
+
 # Typing
 from typing import Union
 
@@ -62,13 +65,15 @@ class configuration:
     # Platform texture render height (It as assumed to be square so only one dimension is defined)
     platform_render_height: float = 40
     # Platform vertical movement speed
-    platform_speed = 0.015
+    platform_speed = 0.04
     # Procedural generation limits
     platform_random_factor: (float, float) = (0.2, 0.8)
     # Increment after number of platforms passed
-    level_number_of_platforms = 10
+    level_number_of_platforms = 5
     # Number of platforms to skip between each two platforms
     skip_platform_count : int = 4
+    # Number of platforms per screen
+    number_of_platforms: int = 4
 
     # Score  control
     # Score font color
@@ -83,7 +88,10 @@ class configuration:
     font_size : int = 36
     # Score coordinates
     score_coordinates : (float,float) = (0,10)
-
+    # Score data file path
+    score_data_file_path : str = r'./score_data.dat'
+    # game over screen coordinates
+    game_over_coordinates : (float,float) = (30,300)
 
 #region Platform
 @dataclass
@@ -196,10 +204,9 @@ class PlatformManager:
         self.platforms.append(Platform(x_coord=x_coord, y_coord=y_coord, width=width, height=self.platform_height))
 
     def update_and_return_platforms(self, delta : float = 1/60*1000, speed_multiplier : float = 1, update_position : bool = False):
-        number_of_platforms : int = 4
 
         if self.platforms == []:
-            for platform_i in np.arange(1,number_of_platforms * self.skip_platform_count,self.skip_platform_count):
+            for platform_i in np.arange(1,configuration.number_of_platforms * self.skip_platform_count,self.skip_platform_count):
                 y_coord : float = platform_i * self.platform_height
                 self.add_platform(y_coord=y_coord)
         else:
@@ -355,6 +362,35 @@ class PlayerScoreControl:
         self._number_visited_platforms_since_last_speed_mult_inc : int = 0
         self._speed_multiplier : float = 1
         self._level : int = 1
+        self._tmp_speed_multiplier : float = 0
+        self._paused : bool = False
+
+        self._load_score_data()
+
+    def _load_score_data(self):
+        if path.exists(configuration.score_data_file_path):
+            with open(configuration.score_data_file_path, 'r') as score_data_file_path:
+                high_score = score_data_file_path.read()
+            if high_score.isdigit():
+                self._high_score = int(high_score)
+            else:
+                self._high_score = 0
+        else:
+            self._high_score = 0
+
+    def check_and_save_high_score(self):
+        if self._current_score > self._high_score:
+            with open(configuration.score_data_file_path, 'w') as score_data_file_path:
+                score_data_file_path.write(str(self._current_score))
+
+    def pause_game(self):
+        self._paused = True
+        self._tmp_speed_multiplier = self._speed_multiplier
+        self._speed_multiplier = 0
+
+    def resume_game(self):
+        self._paused = False
+        self._speed_multiplier = self._tmp_speed_multiplier
 
     def update_score(self, delta : float):
         self._timestamp += delta
@@ -372,19 +408,27 @@ class PlayerScoreControl:
         self._last_score_inc_stamp = self._timestamp
 
         if  self._number_visited_platforms_since_last_speed_mult_inc >= configuration.level_number_of_platforms:
-            self._number_visited_platforms_since_last_speed_mult_inc += 1
-            self._speed_multiplier *= 1.2
+            self._number_visited_platforms_since_last_speed_mult_inc = 0
+            self._speed_multiplier = np.round(self._speed_multiplier * 1.2,1)
             self._level += 1
         else:
-            self._number_visited_platforms_since_last_speed_mult_inc = 0
+            self._number_visited_platforms_since_last_speed_mult_inc += 1
 
     @property
     def get_score(self) -> int:
         return self._current_score
 
     @property
-    def get_speed_multiplier(self):
+    def get_speed_multiplier(self) -> float:
         return self._speed_multiplier
+
+    @property
+    def is_paused(self) -> bool:
+        return self._paused
+
+    @property
+    def get_high_score(self) -> int:
+        return self._high_score
 
     def render_score(self) -> None:
         # Choose a font and size
@@ -394,7 +438,9 @@ class PlayerScoreControl:
         pygame.draw.rect(self._window, configuration.score_panel_background_color, (0,0,configuration.window_size[0], configuration.platform_render_height))
 
         # Render the text into an image (Surface)
-        text_surface = font.render(f'Score : {self._current_score} Level : {self._level} Booster : {"ON" if self._booster_on else "OFF"}', True, configuration.score_font_color)
+        #text_surface = font.render(f'Score : {self._current_score} Level : {self._level} Booster : {"ON" if self._booster_on else "OFF"}', True, configuration.score_font_color)
+        text_surface = font.render(f'Score : {self._current_score} Level : {self._level} Speed X : {self._speed_multiplier}',
+                                   True, configuration.score_font_color)
 
         self._window.blit(text_surface, configuration.score_coordinates)
 
@@ -435,6 +481,9 @@ class Player:
         self.score_controller = PlayerScoreControl(self.window)
 
     def player_key_press(self, keys : ScancodeWrapper):
+        if self.score_controller.is_paused:
+            return
+
         self.player_movement_state = PlayerMovementState.idle
 
         if keys[pygame.K_RIGHT]:
@@ -461,6 +510,11 @@ class Player:
         if self.bottom >= self.window_size[1]:
             self.y_coord = self.window_size[1] - self.player_size[1]
             self.allow_jumping = True
+            if self.move_platforms:
+                self.score_controller.pause_game()
+                self.score_controller.check_and_save_high_score()
+                self.render_game_over()
+
         if self.right >= self.window_size[0]:
             self.allow_jumping = True
             self.tmp_jump_height = 0
@@ -568,13 +622,22 @@ class Player:
         # 5. Update score
         self.score_controller.update_score(delta)
 
+    def render_game_over(self) -> None:
+        font = pygame.font.Font(None, configuration.font_size)
+
+        text_game_over = font.render(f'Game Over! - Score: {self.score_controller.get_score} - High Score: {self.score_controller.get_high_score}',
+                                   True, configuration.score_font_color)
+
+        self.window.blit(text_game_over, configuration.game_over_coordinates)
+
     def render_player(self, delta: float) -> None:
         """
         Renders the player
         :param delta: time since last frame render
         :return: none
         """
-        self.character_sprite = self.character_animation_controller.update_player_sprite(delta)
+        if not self.score_controller.is_paused:
+            self.character_sprite = self.character_animation_controller.update_player_sprite(delta)
         self.process_player_state(delta)
         self.window.blit(self.character_sprite,(self.x_coord,self.y_coord))
         self.score_controller.render_score()
